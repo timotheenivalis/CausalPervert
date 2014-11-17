@@ -1,0 +1,21 @@
+ model {
+    #priors and constraints
+    AB~dunif(-10,10)
+    AC~dunif(-10,10)
+    BC~dunif(-10,10)
+    intB~dunif(-10,10)
+    intC~dunif(-10,10)
+    tauB<-pow(sdB,-2)
+    tauC<-pow(sdC,-2)
+    sdB~dunif(0,10)
+    sdC~dunif(0,10)
+    #likelihood
+    for (i in 1:S)    
+      {
+        oB[i]~dnorm(B[i],tauB)
+        B[i]<-intB+AB*oA[i]
+        oC[i]~dnorm(C[i],tauC)
+        C[i]<-intC+AC*oA[i]+BC*oB[i]
+      }
+
+    }

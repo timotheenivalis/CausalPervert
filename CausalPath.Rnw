@@ -1,0 +1,178 @@
+\documentclass{article}
+
+\usepackage{booktabs}
+\usepackage[top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
+\usepackage{wasysym}
+
+\usepackage{float}
+\usepackage{tikz} % for arrows and figures
+\usetikzlibrary{positioning,decorations.pathreplacing,shapes}
+
+\title{Can we "infer" causality with a single linear model in the case of a non-linear causal path?}
+\date{\today} %%If commented, the current date is used.
+
+\author{Timoth\'{e}e Bonnet}
+
+\begin{document}
+
+\maketitle
+
+After the talk of this pervert mouse rapist, we were wondering whether a linear model is enough to identify correctly causality when there are direct and indirect effects of a cause. 
+
+
+Let's figure this out, by first creating some data using this function:
+
+<<function>>=
+fiat_datum<-function(AB=3,BC=4,AC=2,nbpt=1000,noise=0, nastiness=0)
+{
+unobservedProcess1<-runif(n=nbpt,min = -1,max=1)
+unobservedProcess2<-runif(n=nbpt,min = -1,max=1)
+cause<-rnorm(n = nbpt,mean=1,sd=3)
+consequence1<-(5+cause*AB+rnorm(nbpt,mean=0,sd = 2)-noise*1.5*unobservedProcess1)^(1+nastiness)
+consequence2<-2+cause*AC+consequence1*BC+rnorm(nbpt,mean=0,sd=2)+noise*10*unobservedProcess2  
+
+df<-data.frame(cause, consequence1,consequence2)
+}
+
+df<-fiat_datum()
+@
+
+When we keep it very simple, it looks like this:
+<<ShowData, dev='tikz', echo=F,out.width='0.6\\textwidth',fig.align='center'>>=
+plot(df)
+@
+
+The idea behind it, is that a cause A affects a variable B and a variable C, while B also affects C. 
+
+
+\begin{figure}[H]
+\centering
+\label{figure:causal}
+\begin{tikzpicture}[%
+  % common options for blocks:
+  block/.style = {draw, fill=blue!30, align=center, anchor=north,
+              minimum height=0.55cm, inner sep=0},
+  % common options for the circles:
+  ball/.style = {circle, draw, align=center, anchor=north, inner sep=0}
+	]
+  
+  \node[ball, fill=gray!30,text width=1.7cm] (A) at (0,0) {Sun};
+  \node[ball, fill=gray!30,text width=1.7cm] (B) at (4,2) {Friend};
+  \node[ball, fill=gray!30,text width=1.7cm] (C) at (4,-2) {Hike};
+
+  \draw[->,thick,draw=red!60] (A.east) -- (B.west)
+  node[midway,fill=white] (midway) {3};
+  \draw[->,thick,draw=red!40] (A.east) -- (C.west)
+    node[midway,fill=white] (midway) {2};
+  \draw[->,thick,draw=red!80] (B.south) -- (C.north)
+    node[midway,fill=white] (midway) {4};
+\end{tikzpicture}
+\caption{Causal path between the possibility to go hiking during the weekend, the weather, and a lovely friend going hiking. The arrows indicate the direction of causality. Their color and the number in their middle indicates the slope beween the variables.}
+\end{figure}
+
+
+Can we find back the causal coefficients Sun $\rightarrow$ Hike and Friend $\rightarrow$ Hike, using only a multiple regression?
+
+
+<<Model,>>=
+
+m0<-lm(consequence2~1+cause+consequence1,data=df)
+summary(m0)
+@
+
+Yes, the two independent variables do control one each other, the estimation is not biased. However, maybe the accuracy of the estimation is affected by the correlation between them.
+
+Let's generate data with a stronger dependency between the cause and the first consequence, keeping the other two causal path constants.
+
+<<dataCor, dev='tikz', echo=T,out.width='0.6\\textwidth',fig.align='center'>>=
+df2<-fiat_datum(AB=8)
+plot(df2)
+@
+
+<<ModelCor,>>=
+
+m1<-lm(consequence2~1+cause+consequence1,data=df2)
+summary(m1)
+@
+
+The estimate does not seem biased, let's check it seriously:
+<<repmod, dev='tikz', echo=T,out.width='0.6\\textwidth',fig.align='center'>>=
+vectcause<-replicate(n = 1000,expr = {lm(consequence2~1+cause+consequence1,
+                                         data=fiat_datum(AB=5))$coefficients["cause"]})
+plot(density(vectcause))
+abline(v=2,lwd=3,col="red")
+mean(vectcause);sd(vectcause)/(sqrt(1000))
+@
+Which seems very reasonable.
+
+However, the accuracy is lower. Interestingly, only the direct path estimation (the variance, on the slot ["cause";"cause"]) is blured by the correlation between the cause and the first consequence:
+<<>>=
+vcov(m0)
+vcov(m1)
+@
+
+Probably, modelling explicitly the causal path would help to deal with the loss of accuracy. 
+
+
+I tried with a simple bayesian model. For some reasons, KnitR does not want to write this sink on the source folder so the model must be put by hand in a .txt file. 
+
+<<>>=
+library(R2jags)
+# 
+# sink("simpleB.txt")
+# cat("
+#     model {
+#     #priors and constraints
+#     AB~dunif(-10,10)
+#     AC~dunif(-10,10)
+#     BC~dunif(-10,10)
+#     intB~dunif(-10,10)
+#     intC~dunif(-10,10)
+#     tauB<-pow(sdB,-2)
+#     tauC<-pow(sdC,-2)
+#     sdB~dunif(0,10)
+#     sdC~dunif(0,10)
+#     #likelihood
+#     for (i in 1:S)    
+#       {
+#         oB[i]~dnorm(B[i],tauB)
+#         B[i]<-intB+AB*oA[i]
+#         oC[i]~dnorm(C[i],tauC)
+#         C[i]<-intC+AC*oA[i]+BC*oB[i]
+#       }
+# 
+#     }
+#     ",fill = TRUE)
+# sink()
+@
+
+If I run it for the first (not too correlated) data set:
+
+<<>>=
+dataB<-list(oB=df$consequence1,oA=df$cause,S=nrow(df),oC=df$consequence2)
+initsB <- function() list(AB =runif(n=1,-10,10),AC=runif(n=1,-10,10),BC=runif(n=1,-10,10))
+paramsB <- c("AB","AC","BC")
+# MCMC settings
+ni <- 5000 ; nt <- 10 ; nb <- 1000 ; nc <- 3
+B1<-jags(dataB,initsB,paramsB,"simpleB.txt",
+         n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, working.directory = getwd())
+print(B1)
+@
+
+And now for the second (much more correlated) data set:
+<<>>=
+dataB<-list(oB=df2$consequence1,oA=df2$cause,S=nrow(df2),oC=df2$consequence2)
+initsB <- function() list(AB =runif(n=1,-10,10),AC=runif(n=1,-10,10),BC=runif(n=1,-10,10))
+paramsB <- c("AB","AC","BC")
+# MCMC settings
+ni <- 5000 ; nt <- 10 ; nb <- 1000 ; nc <- 3
+B2<-jags(dataB,initsB,paramsB,"simpleB.txt",
+         n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, working.directory = getwd())
+print(B2)
+@
+
+The uncertainty around AC is much larger in the second case... so it does not help.
+
+hmmm, so there is nothing to do about this correlation between the causal paths?
+
+\end{document}
